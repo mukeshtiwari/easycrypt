@@ -353,36 +353,8 @@ let t_rewrite_prept info pt tc =
   LowRewrite.t_rewrite_r info (pt_of_prept tc pt) tc
 
 (* -------------------------------------------------------------------- *)
-let process_auto ?(bases = [EcEnv.Auto.dname]) ?(depth = 1) (tc : tcenv1) =
-  let module E = struct
-      exception Done of tcenv
-      exception Fail
-  end in
-
-  let bases = EcEnv.Auto.getall bases (FApi.tc1_env tc) in
-
-  let rec forall ctn tc =
-    if ctn >= depth then t_fail tc else begin
-      List.iter
-        (fun p -> try raise (E.Done (for1 ctn p tc)) with E.Fail -> ())
-        bases;
-      t_id tc
-    end
-
-  and for1 ctn (p : EcPath.path) tc =
-    let pt = PT.pt_of_uglobal !!tc (FApi.tc1_hyps tc) p in
-
-    try
-      FApi.t_seqs
-        [EcLowGoal.Apply.t_apply_bwd_r ~mode:fmrigid ~canview:false pt;
-         EcLowGoal.t_trivial; forall (ctn+1)]
-        tc
-
-    with EcLowGoal.Apply.NoInstance _ ->
-      raise E.Fail
-  in
-
-  try forall 0 tc with E.Done tc -> tc
+let process_auto ?bases ?depth (tc : tcenv1) =
+  EcLowGoal.t_auto ?bases ?depth tc
 
 (* -------------------------------------------------------------------- *)
 let process_solve ?bases ?depth (tc : tcenv1) =
@@ -394,8 +366,11 @@ let process_solve ?bases ?depth (tc : tcenv1) =
 
 (* -------------------------------------------------------------------- *)
 let process_trivial (tc : tcenv1) =
-  let subtc = t_seqs [EcPhlAuto.t_phl_trivial; process_auto] in
-  EcLowGoal.t_trivial ~subtc tc
+  EcPhlAuto.t_pl_trivial tc
+
+(* -------------------------------------------------------------------- *)
+let process_crushmode d =
+  d.cm_simplify, if d.cm_solve then Some process_trivial else None
 
 (* -------------------------------------------------------------------- *)
 let process_done tc =
@@ -1304,9 +1279,10 @@ let rec process_mintros_1 ?(cf = true) ttenv pis gs =
       (List.rev !togen) (FApi.as_tcenv1 tc)
 
   and intro1_crush (_st : ST.state) (d : crushmode) (gs : tcenv1) =
-    EcLowGoal.t_crush
-      ~delta:d.cm_simplify
-      ?tsolve:(if d.cm_solve then Some process_trivial else None)
+    let delta, tsolve = process_crushmode d in
+    FApi.t_or
+      (EcPhlConseq.t_conseqauto ~delta ?tsolve)
+      (EcLowGoal.t_crush ~delta ?tsolve)
       gs
 
   and dointro (st : ST.state) nointro pis (gs : tcenv) =
@@ -1481,6 +1457,20 @@ let process_generalize1 ?(doeq = false) pattern (tc : tcenv1) =
           let pt, ax = PT.concretize pt in
           t_cutdef pt ax tc
     end
+
+    | `LetIn x ->
+        let id =
+          let binding =
+            try  Some (LDecl.by_name (unloc x) hyps)
+            with EcEnv.LDecl.LdeclError _ -> None in
+
+            match binding  with
+            | Some (id, LD_var (_, Some _)) -> id
+            | _ ->
+                let msg = "symbol must reference let-in" in
+                tc_error ~loc:(loc x) !!tc "%s" msg
+
+        in t_generalize_hyp ~clear ~letin:true id tc
   in
 
   match ffpattern_of_genpattern hyps pattern with
@@ -1579,20 +1569,29 @@ let process_pose xsym bds o p (tc : tcenv1) =
 (* -------------------------------------------------------------------- *)
 type apply_t = EcParsetree.apply_info
 
-let process_apply ~implicits (infos : apply_t) tc =
-  match infos with
-  | `ApplyIn (pe, tg) ->
-      process_apply_fwd ~implicits (pe, tg) tc
+let process_apply ~implicits ((infos, orv) : apply_t * prevert option) tc =
+  let do_apply tc =
+    match infos with
+    | `ApplyIn (pe, tg) ->
+        process_apply_fwd ~implicits (pe, tg) tc
 
-  | `Apply (pe, mode) ->
-      let for1 tc pe =
-        t_last (process_apply_bwd ~implicits `Apply pe) tc in
-      let tc = List.fold_left for1 (tcenv_of_tcenv1 tc) pe in
-      if mode = `Exact then t_onall process_done tc else tc
+    | `Apply (pe, mode) ->
+        let for1 tc pe =
+          t_last (process_apply_bwd ~implicits `Apply pe) tc in
+        let tc = List.fold_left for1 (tcenv_of_tcenv1 tc) pe in
+        if mode = `Exact then t_onall process_done tc else tc
 
-  | `Top mode ->
-      let tc = process_apply_top tc in
-      if mode = `Exact then t_onall process_done tc else tc
+    | `Top mode ->
+        let tc = process_apply_top tc in
+        if mode = `Exact then t_onall process_done tc else tc
+
+  in
+
+  t_seq
+    (fun tc -> ofdfl
+       (fun () -> t_id tc)
+       (omap (fun rv -> process_move [] rv tc) orv))
+    do_apply tc
 
 (* -------------------------------------------------------------------- *)
 let process_subst syms (tc : tcenv1) =

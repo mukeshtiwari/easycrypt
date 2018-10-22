@@ -513,9 +513,9 @@ let rec h_red ri env hyps f =
       f_app_simpl op args f.f_ty
 
     (* η-reduction *)
-  | Fquant (Llambda, [x, GTty _], { f_node = Fapp (f, [{ f_node = Flocal y }]) })
-      when id_equal x y && not (Mid.mem x f.f_fv)
-    -> f
+  | Fquant (Llambda, [x, GTty _], { f_node = Fapp (fn, args) })
+      when can_eta x (fn, args)
+    -> f_app fn (List.take (List.length args - 1) args) f.f_ty
 
     (* contextual rule - let *)
   | Flet (lp, f1, f2) -> f_let lp (h_red ri env hyps f1) f2
@@ -541,6 +541,13 @@ let rec h_red ri env hyps f =
     end
 
   | _ -> raise NotReducible
+
+and can_eta x (f, args) =
+  match List.rev args with
+  | { f_node = Flocal y } :: args ->
+      let check v = not (Mid.mem x v.f_fv) in
+      id_equal x y && List.for_all check (f :: args)
+  | _ -> false
 
 and h_red_args ri env hyps args =
   match args with
@@ -745,20 +752,24 @@ and check_alpha_equal ri hyps f1 f2 =
       | None ->
         match h_red_opt ri env hyps f2 with
         | Some f2 -> aux env subst f1 f2
-        | None ->
-          let ty,codom =
-            match f1.f_node, f2.f_node with
-            | Fquant(Llambda,(_,GTty ty)::bd, f1'), _ ->
-              ty, toarrow (List.map (fun (_,gty)-> gty_as_ty gty) bd) f1'.f_ty
-            | _,  Fquant(Llambda,(_,GTty ty)::bd,f2') ->
-              ty, toarrow (List.map (fun (_,gty)-> gty_as_ty gty) bd) f2'.f_ty
-            | _, _ -> raise e in
-          let x = f_local (EcIdent.create "_") ty in
-          let f1 = f_app_simpl f1 [x] codom in
-          let f2 = f_app_simpl f2 [x] codom in
-          aux env subst f1 f2
-  in
-  aux env Fsubst.f_subst_id f1 f2
+        | None when EqTest.for_type env f1.f_ty f2.f_ty -> begin
+            let ty, codom =
+              match f1.f_node, f2.f_node with
+              | Fquant (Llambda, (_, GTty ty) :: bd, f1'), _ ->
+                  ty, toarrow (List.map (gty_as_ty |- snd) bd) f1'.f_ty
+              | _,  Fquant(Llambda, (_, GTty ty) :: bd, f2') ->
+                  ty, toarrow (List.map (gty_as_ty |- snd) bd) f2'.f_ty
+              | _, _ -> raise e
+            in
+
+              let x  = f_local (EcIdent.create "_") ty in
+              let f1 = f_app_simpl f1 [x] codom in
+              let f2 = f_app_simpl f2 [x] codom in
+              aux env subst f1 f2
+        end
+        | _ -> raise e
+
+  in aux env Fsubst.f_subst_id f1 f2
 
 and check_alpha_eq f1 f2 = check_alpha_equal no_red   f1 f2
 and check_conv     f1 f2 = check_alpha_equal full_red f1 f2

@@ -778,7 +778,7 @@ qed.
 
 lemma weight_dmap (d : 'a distr) (f : 'a -> 'b) :
   weight (dmap d f) = weight d.
-proof. by rewrite /weight {2}(_: predT = preim f predT) // dmapE. qed.
+proof. by rewrite (_: predT = preim f predT) // dmapE. qed.
 
 lemma dmap_ll (d : 'a distr) (f : 'a -> 'b) : 
   is_lossless d => is_lossless (dmap d f).
@@ -925,3 +925,9 @@ case: (weight d = 0%r) => Hw.
 apply dscalar_uni =>//; smt (ge0_weight @Real).
 qed.
 
+(* -------------------------------------------------------------------- *)
+lemma nosmt rnd_funi ['a] (d : 'a distr) :
+  is_funiform d => forall x y, mu1 d x = mu1 d y.
+proof. by apply. qed.
+
+hint solve 0 random : rnd_funi.

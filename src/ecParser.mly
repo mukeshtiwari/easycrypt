@@ -160,6 +160,7 @@
   type smt = [
     | `ALL
     | `ITERATE
+    | `QUORUM         of int
     | `MAXLEMMAS      of int option
     | `MAXPROVERS     of int
     | `PROVER         of prover list
@@ -190,9 +191,19 @@
 
     let option_matching =
        option_matching
-         [ "all"; "timeout"; "maxprovers"; "maxlemmas";
-           "wantedlemmas"; "unwantedlemmas";
-           "prover"; "verbose"; "lazy"; "full"; "iterate"; "selected" ]
+         [ "all"           ;
+           "quorum"        ;
+           "timeout"       ;
+           "maxprovers"    ;
+           "maxlemmas"     ;
+           "wantedlemmas"  ;
+           "unwantedlemmas";
+           "prover"        ;
+           "verbose"       ;
+           "lazy"          ;
+           "full"          ;
+           "iterate"       ;
+           "selected"      ]
 
     let as_int = function
       | None          -> `None
@@ -239,6 +250,7 @@
 
       match unloc s with
       | "timeout"        -> `TIMEOUT        (get_as     ("int"   , as_int) s o)
+      | "quorum"         -> `QUORUM         (get_as     ("int"   , as_int) s o)
       | "maxprovers"     -> `MAXPROVERS     (get_as     ("int"   , as_int) s o)
       | "maxlemmas"      -> `MAXLEMMAS      (get_opt_as ("int"   , as_int) s o)
       | "wantedlemmas"   -> `WANTEDLEMMAS   (get_as     ("dbhint", as_dbhint) s o)
@@ -256,6 +268,7 @@
       let mprovers = ref None in
       let timeout  = ref None in
       let pnames   = ref None in
+      let quorum   = ref None in
       let all      = ref None in
       let mlemmas  = ref None in
       let wanted   = ref None in
@@ -268,32 +281,35 @@
       let is_universal p = unloc p = "" || unloc p = "!" in
 
       let ok_use_only pp p =
-        if pp.pp_add_rm <> []
-        then let msg = "use-only elements must come at beginning"
-	     in parse_error (loc p) (Some msg)
-	else if pp.pp_use_only <> [] && is_universal p
-             then let msg = "cannot add universal to non-empty use-only"
-                  in parse_error (loc p) (Some msg)
-        else match pp.pp_use_only with
-             | [q] ->
-	       if is_universal q
-	       then let msg = "use-only part is already universal"
-		    in parse_error (loc p) (Some msg)
-	       else ()
-             | _ -> () in
+        if pp.pp_add_rm <> [] then
+          let msg = "use-only elements must come at beginning" in
+          parse_error (loc p) (Some msg)
+        else if pp.pp_use_only <> [] && is_universal p then
+          let msg = "cannot add universal to non-empty use-only" in
+          parse_error (loc p) (Some msg)
+        else
+          match pp.pp_use_only with
+          | [q] ->
+              if is_universal q then
+                let msg = "use-only part is already universal" in
+                parse_error (loc p) (Some msg)
+          | _ -> () in
 
       let add_prover (k, p) =
-        let r = odfl empty_pprover_list !pnames in
-        pnames := Some
-          (match k with
-           | `Only    ->
-	     (ok_use_only r p; { r with pp_use_only = p :: r.pp_use_only })
-           | `Include -> { r with pp_add_rm = (`Include, p) :: r.pp_add_rm }
-           | `Exclude -> { r with pp_add_rm = (`Exclude, p) :: r.pp_add_rm }) in
+        let r  = odfl empty_pprover_list !pnames in
+        let pr =
+          match k with
+          | `Only ->
+	            ok_use_only r p; { r with pp_use_only = p :: r.pp_use_only }
+          | `Include -> { r with pp_add_rm = (`Include, p) :: r.pp_add_rm }
+          | `Exclude -> { r with pp_add_rm = (`Exclude, p) :: r.pp_add_rm }
+
+        in pnames := Some pr in
 
       let do1 o  =
         match o with
         | `ALL              -> all      := Some true
+        | `QUORUM         n -> quorum   := Some n
         | `TIMEOUT        n -> timeout  := Some n
         | `MAXPROVERS     n -> mprovers := Some n
         | `MAXLEMMAS      n -> mlemmas  := Some n
@@ -316,6 +332,7 @@
         pprov_timeout   = !timeout;
         pprov_cpufactor =  None;
         pprov_names     = !pnames;
+        pprov_quorum    = !quorum;
         pprov_verbose   = !verbose;
         pprov_version   = !version;
         plem_all        = !all;
@@ -341,8 +358,6 @@
 (* Tokens *)
 %token ANDA AND (* asym : &&, sym : /\ *)
 %token ORA  OR  (* asym : ||, sym : \/ *)
-
-%token <EcParsetree.codepos> CPOS
 
 %token<[`Raw|`Eq]> RING
 %token<[`Raw|`Eq]> FIELD
@@ -380,6 +395,7 @@
 %token CLEAR
 %token CLONE
 %token COLON
+%token COLONTILD
 %token COMMA
 %token CONGR
 %token CONSEQ
@@ -414,6 +430,7 @@
 %token FINAL
 %token FIRST
 %token FISSION
+%token FOR
 %token FORALL
 %token FUN
 %token FUSION
@@ -835,6 +852,9 @@ sexpr_u:
        PEscope (pqsymb_of_symb p.pl_loc "<top>", e)
      end }
 
+| LPAREN e=expr COLONTILD ty=loc(type_exp) RPAREN
+   { PEcast (e, ty) }
+
 | n=uint
    { PEint n }
 
@@ -1014,6 +1034,9 @@ sform_u(P):
          parse_error p.pl_loc (Some "invalid scope name");
        PFscope (pqsymb_of_symb p.pl_loc "<top>", f)
      end }
+
+| LPAREN f=form_r(P) COLONTILD ty=loc(type_exp) RPAREN
+   { PFcast (f, ty) }
 
 | n=uint
    { PFint n }
@@ -1354,6 +1377,9 @@ fun_decl:
         pfd_uses     = (true, None); }
     }
 
+include_proc:
+| PLUS? xs=plist1(lident,COMMA) { `Include_proc xs }
+| MINUS xs=plist1(lident,COMMA) { `Exclude_proc xs }
 mod_item:
 | v=var_decl
     { Pst_var v }
@@ -1372,6 +1398,10 @@ mod_item:
 
 | PROC x=lident EQ f=loc(fident)
     { Pst_alias (x, f) }
+
+| INCLUDE m=loc(mod_qident) xs=bracket(include_proc)?
+    { Pst_maliases (m,xs) }
+
 
 (* -------------------------------------------------------------------- *)
 (* Modules                                                              *)
@@ -1443,6 +1473,8 @@ sig_param:
 | x=uident COLON i=mod_type { (x, i) }
 
 signature_item:
+| INCLUDE i=mod_type xs=bracket(include_proc)? qs=brace(qident*)?
+   { `Include (i, xs, qs) }
 | PROC i=boption(STAR) x=lident pd=param_decl COLON ty=loc(type_exp) qs=brace(qident*)?
     { `FunctionDecl
           { pfd_name     = x;
@@ -1576,7 +1608,7 @@ op_or_const:
 | CONST { `Const }
 
 operator:
-| k=op_or_const st=nosmt x=plist1(oident, COMMA)
+| k=op_or_const st=nosmt tags=bracket(ident*)? x=plist1(oident, COMMA)
     tyvars=tyvars_decl? args=ptybindings_decl?
     sty=prefix(COLON, loc(type_exp))? b=seq(prefix(EQ, loc(opbody)), opax?)?
 
@@ -1587,19 +1619,21 @@ operator:
     { po_kind    = k;
       po_name    = List.hd x;
       po_aliases = List.tl x;
+      po_tags    = odfl [] tags;
       po_tyvars  = tyvars;
       po_args    = odfl [] args;
       po_def     = opdef_of_opbody sty (omap (unloc |- fst) b);
       po_ax      = obind snd b;
       po_nosmt   = st; } }
 
-| k=op_or_const st=nosmt x=plist1(oident, COMMA)
+| k=op_or_const st=nosmt tags=bracket(ident*)? x=plist1(oident, COMMA)
     tyvars=tyvars_decl? args=ptybindings_decl?
     COLON LBRACE sty=loc(type_exp) PIPE reft=form RBRACE AS rname=ident
 
   { { po_kind    = k;
       po_name    = List.hd x;
       po_aliases = List.tl x;
+      po_tags    = odfl [] tags;
       po_tyvars  = tyvars;
       po_args    = odfl [] args;
       po_def     = opdef_of_opbody sty (Some (`Reft (rname, reft)));
@@ -1994,6 +2028,16 @@ ipsubsttop:
 | LTLTSTARGT { Some `RtoL }
 | LTSTARGTGT { Some `LtoR }
 
+crushmode:
+| PIPEGT { { cm_simplify = false; cm_solve = false; } }
+
+| SLASHGT { { cm_simplify = true ; cm_solve = false; } }
+
+| PIPEPIPEGT { { cm_simplify = false; cm_solve = true ; } }
+
+| SLASHSLASHGT { { cm_simplify = true ; cm_solve = true ; } }
+
+
 intro_pattern:
 | x=ipcore
    { IPCore x }
@@ -2061,17 +2105,8 @@ intro_pattern:
 | MINUS
    { IPBreak }
 
-| PIPEGT
-   { IPCrush { cm_simplify = false; cm_solve = false; } }
-
-| SLASHGT
-   { IPCrush { cm_simplify = true ; cm_solve = false; } }
-
-| PIPEPIPEGT
-   { IPCrush { cm_simplify = false; cm_solve = true ; } }
-
-| SLASHSLASHGT
-   { IPCrush { cm_simplify = true ; cm_solve = true ; } }
+| cm=crushmode
+   { IPCrush cm }
 
 gpterm_head(F):
 | exp=iboption(AT) p=qident tvi=tvars_app?
@@ -2231,6 +2266,9 @@ genpattern:
   RPAREN
     { `ProofTerm (mk_pterm exp (FPCut (Some f)) args) }
 
+| AT x=ident
+    { `LetIn x }
+
 simplify_arg:
 | DELTA l=qoident* { `Delta l }
 | ZETA             { `Zeta }
@@ -2273,15 +2311,46 @@ tac_dir:
 | FWDS  { Fwds }
 | empty { Backs }
 
-codepos:
-| i=word { (i, None) }
-| c=CPOS { c }
+icodepos_r:
+| IF       { (`If     :> cp_match) }
+| WHILE    { (`While  :> cp_match) }
+| LARROW   { (`Assign :> cp_match) }
+| LESAMPLE { (`Sample :> cp_match) }
+| LEAT     { (`Call   :> cp_match) }
 
-code_position:
-| n=sword
+%inline icodepos:
+ | HAT x=icodepos_r { x }
+
+codepos1_wo_off:
+| i=sword
+    { (`ByPos i :> cp_base) }
+
+| k=icodepos i=option(brace(sword))
+    { (`ByMatch (i, k) :> cp_base) }
+
+codepos1:
+| cp=codepos1_wo_off { (0, cp) }
+
+| cp=codepos1_wo_off AMP PLUS  i=word { ( i, cp) }
+| cp=codepos1_wo_off AMP MINUS i=word { (-i, cp) }
+
+%inline nm1_codepos:
+| i=codepos1 k=ID(DOT { 0 } | QUESTION { 1 } )
+    { (i, k) }
+
+codepos:
+| nm=rlist0(nm1_codepos, empty) i=codepos1
+    { (List.rev nm, i) }
+
+o_codepos1:
+| UNDERSCORE { None }
+| i=codepos1 { Some i}
+
+s_codepos1:
+| n=codepos1
     { Single n }
 
-| n1=sword n2=sword
+| n1=codepos1 n2=codepos1
     { Double (n1, n2) }
 
 while_tac_info:
@@ -2443,25 +2512,34 @@ logtactic:
    { Pelim (e, Some p) }
 
 | APPLY
-   { Papply (`Top `Apply) }
+   { Papply (`Top `Apply, None) }
 
-| APPLY COLON? e=pterm
-   { Papply (`Apply ([e], `Apply)) }
+| APPLY e=pterm
+   { Papply (`Apply ([e], `Apply), None) }
+
+| APPLY COLON e=pterm rv=revert
+   { Papply (`Apply ([e], `Apply), Some rv) }
 
 | APPLY es=prefix(SLASH, pterm)+
-   { Papply (`Apply (es, `Apply)) }
+   { Papply (`Apply (es, `Apply), None) }
 
-| APPLY COLON? e=pterm IN x=ident
-   { Papply (`ApplyIn (e, x)) }
+| APPLY e=pterm IN x=ident
+   { Papply (`ApplyIn (e, x), None) }
+
+| APPLY COLON e=pterm rv=revert IN x=ident
+   { Papply (`ApplyIn (e, x), Some rv) }
 
 | EXACT
-   { Papply (`Top `Exact) }
+   { Papply (`Top `Exact, None) }
 
-| EXACT COLON? e=pterm
-   { Papply (`Apply ([e], `Exact)) }
+| EXACT e=pterm
+   { Papply (`Apply ([e], `Exact), None) }
+
+| EXACT COLON e=pterm rv=revert
+   { Papply (`Apply ([e], `Exact), Some rv) }
 
 | EXACT es=prefix(SLASH, pterm)+
-   { Papply (`Apply (es, `Exact)) }
+   { Papply (`Apply (es, `Exact), None) }
 
 | l=simplify
    { Psimplify (mk_simplify l) }
@@ -2504,8 +2582,8 @@ eager_info:
     { LE_todo (h, s1, s2, pr, po) }
 
 eager_tac:
-| SEQ n1=word n2=word i=eager_info COLON p=sform
-    { Peager_seq (i,(n1,n2),p) }
+| SEQ n1=codepos1 n2=codepos1 i=eager_info COLON p=sform
+    { Peager_seq (i, (n1, n2), p) }
 
 | IF
     { Peager_if }
@@ -2532,25 +2610,24 @@ form_or_double_form:
 | LPAREN UNDERSCORE COLON f1=form LONGARROW f2=form RPAREN
     { Double (f1, f2) }
 
-code_pos:
-| i=word { i }
-
-code_pos_underscore:
-| UNDERSCORE { None }
-| i=code_pos { Some i}
-
 %inline if_option:
-| s=side?
+| s=option(side)
    { `Head s }
 
-| i1=code_pos_underscore i2=code_pos_underscore COLON f=sform
-   { `Seq (None, i1, i2, f) }
+| s=option(side) i1=o_codepos1 i2=o_codepos1 COLON f=sform
+   { `Seq (s, (i1, i2), f) }
 
-| s=side i1=code_pos_underscore i2=code_pos_underscore COLON f=sform
-   { `Seq (Some s, i1, i2, f) }
-
-| s=side i=code_pos? COLON  LPAREN UNDERSCORE COLON f1=form LONGARROW f2=form RPAREN
-   { `SeqOne (s, i, f1, f2) }
+| s=option(side) i=codepos1? COLON LPAREN
+    UNDERSCORE COLON f1=form LONGARROW f2=form
+  RPAREN
+   {
+     match s with
+     | None ->
+       let loc = EcLocation.make $startpos $endpos in
+        parse_error loc (Some (
+          "must provide a side when only one code-position is given"))
+      | Some s -> `SeqOne (s, i, f1, f2)
+   }
 
 byequivopt:
 | b=boption(MINUS) x=lident {
@@ -2574,13 +2651,13 @@ phltactic:
 | PROC STAR
    { Pfun `Code }
 
-| SEQ s=side? d=tac_dir pos=code_position COLON p=form_or_double_form f=app_bd_info
+| SEQ s=side? d=tac_dir pos=s_codepos1 COLON p=form_or_double_form f=app_bd_info
    { Papp (s, d, pos, p, f) }
 
-| WP n=code_position?
+| WP n=s_codepos1?
    { Pwp n }
 
-| SP n=code_position?
+| SP n=s_codepos1?
     { Psp n }
 
 | SKIP
@@ -2595,10 +2672,10 @@ phltactic:
 | CALL s=side? info=gpterm(call_info)
     { Pcall (s, info) }
 
-| RCONDT s=side? i=word
+| RCONDT s=side? i=codepos1
     { Prcond (s, true, i) }
 
-| RCONDF s=side? i=word
+| RCONDF s=side? i=codepos1
     { Prcond (s, false, i) }
 
 | IF opt=if_option
@@ -2655,8 +2732,8 @@ phltactic:
 | FUSION s=side? o=codepos NOT i=word AT d1=word COMMA d2=word
     { Pfusion (s, o, (i, (d1, d2))) }
 
-| UNROLL s=side? o=codepos
-    { Punroll (s, o) }
+| UNROLL b=boption(FOR) s=side? o=codepos
+    { Punroll (s, o, b) }
 
 | SPLITWHILE s=side? o=codepos COLON c=expr %prec prec_tactic
     { Psplitwhile (c, s, o) }
@@ -2694,6 +2771,8 @@ phltactic:
 | CONSEQ cq=cqoptions? UNDERSCORE UNDERSCORE info3=gpterm(conseq_bd)
     { Pconseq (odfl [] cq, (None,None,Some info3)) }
 
+| CONSEQ cm=crushmode { Pconseqauto cm }
+
 | ELIM STAR
     { Phrex_elim }
 
@@ -2709,7 +2788,8 @@ phltactic:
 | BYPR f1=sform f2=sform
     { PPr (Some (f1, f2)) }
 
-| FEL at_pos=word cntr=sform delta=sform q=sform f_event=sform some_p=fel_pred_specs inv=sform?
+| FEL at_pos=codepos1 cntr=sform delta=sform q=sform
+    f_event=sform some_p=fel_pred_specs inv=sform?
     { let info = {
         pfel_cntr  = cntr;
         pfel_asg   = delta;
@@ -2746,7 +2826,11 @@ phltactic:
 | PHOARE EQUIV s=side pr=sform po=sform
     { Pbd_equiv (s, pr, po) }
 
-| AUTO { Pauto }
+| AUTO
+    { Pauto }
+
+| LOSSLESS
+    { Plossless }
 
 bdhoare_split:
 | b1=sform b2=sform b3=sform?
@@ -2785,7 +2869,7 @@ fel_pred_specs:
     {assoc_ps}
 
 eqobs_in_pos:
-| i1=word i2=word { i1, i2 }
+| i1=codepos1 i2=codepos1 { (i1, i2) }
 
 eqobs_in_eqglob1:
 | LPAREN mp1= uoption(loc(fident)) TILD mp2= uoption(loc(fident)) COLON
@@ -3362,8 +3446,10 @@ global_action:
 | WHY3 x=STRING    { GdumpWhy3    x  }
 
 | PRAGMA       x=pragma { Gpragma x }
-| PRAGMA PLUS  x=pragma { Goption (x, true ) }
-| PRAGMA MINUS x=pragma { Goption (x, false) }
+| PRAGMA PLUS  x=pragma { Goption (x, `Bool true ) }
+| PRAGMA MINUS x=pragma { Goption (x, `Bool false) }
+
+| PRAGMA x=pragma EQ i=sword { Goption (x, `Int i) }
 
 pragma_r:
 | x=_lident
@@ -3488,3 +3574,7 @@ or3(X, Y, Z):
 %inline ior_(X, Y):
 | x=X { `Left  x }
 | y=Y { `Right y }
+
+(* -------------------------------------------------------------------- *)
+%inline ID(X):
+| x=X { x }

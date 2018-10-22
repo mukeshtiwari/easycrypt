@@ -95,6 +95,9 @@ op (`\`) ['a] (s1 s2 : 'a fset) = oflist (filter (predC (mem s2)) (elems s1))
 lemma in_fset0: forall x, mem fset0<:'a> x <=> false.
 proof. by move=> x; rewrite set0E mem_oflist. qed.
 
+lemma in_eq_fset0 ['a] (X : 'a fset): (forall x, !x \in X) => X = fset0.
+proof. by move=> mem_X; apply/fsetP=> x; rewrite mem_X in_fset0. qed.
+
 lemma elems_fset0 ['a]: elems fset0 = [<:'a>].
 proof.
 rewrite set0E; apply/perm_eq_small/perm_eq_sym=> //=.
@@ -108,6 +111,10 @@ qed.
 
 lemma in_fset1 z: forall x, mem (fset1<:'a> z) x <=> x = z.
 proof. by move=> x; rewrite set1E /= mem_oflist. qed.
+
+lemma in_eq_fset1 ['a] (X : 'a fset) x0:
+  (forall x, x \in X <=> x = x0) => X = fset1 x0.
+proof. by move=> mem_X; apply/fsetP=> x; rewrite in_fset1 mem_X. qed.
 
 lemma elems_fset1 (x : 'a) : elems (fset1 x) = [x].
 proof.
@@ -245,7 +252,15 @@ proof. by []. qed.
 
 lemma nosmt subset_trans (s1 s2 s3 : 'a fset): 
   s1 \subset s2 => s2 \subset s3 => s1 \subset s3.
-proof. by move=> H1 H2 ? H3;apply /H2/H1. qed.
+proof. by move=> le1 le2 ? le3; apply/le2/le1. qed.
+
+lemma properP (X Y : 'a fset) :
+  X \proper Y <=> X \subset Y /\ exists y, y \in Y /\ ! y \in X.
+proof.
+rewrite /(\proper) &(andb_id2l) fsetP negb_forall /= => le_XY.
+apply/eqboolP/exists_eq => x /=; rewrite -negb_imply; congr.
+by rewrite iffE eqboolP &(andb_idl) => _; apply/le_XY.
+qed.
 
 (* -------------------------------------------------------------------- *)
 lemma nosmt eqEsubset (A B : 'a fset) : (A = B) <=> (A \subset B) /\ (B \subset A).

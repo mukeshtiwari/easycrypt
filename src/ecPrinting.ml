@@ -37,14 +37,19 @@ module PPEnv = struct
     ppe_inuse  : Ssym.t;
     ppe_univar : (symbol Mint.t * Ssym.t) ref;
     ppe_fb     : Sp.t;
+    ppe_width  : int;
   }
 
   let ofenv (env : EcEnv.env) =
+    let width =
+      EcGState.asint 0 (EcGState.getvalue "PP:width" (EcEnv.gstate env)) in
+
     { ppe_env    = env;
       ppe_locals = Mid.empty;
       ppe_inuse  = Ssym.empty;
       ppe_univar = ref (Mint.empty, Ssym.empty);
-      ppe_fb     = Sp.empty; }
+      ppe_fb     = Sp.empty;
+      ppe_width  = max 20 width; }
 
   let enter_by_memid ppe id =
     match EcEnv.Memory.byid id ppe.ppe_env with
@@ -1224,6 +1229,33 @@ let string_of_hcmp = function
   | FHge -> ">="
 
 (* -------------------------------------------------------------------- *)
+let string_of_cpos1 ((off, cp) : EcParsetree.codepos1) =
+  let s =
+    match cp with
+    | `ByPos i ->
+        string_of_int i
+
+    | `ByMatch (i, k) ->
+        let s =
+          let k =
+            match k with
+            | `If     -> "if"
+            | `While  -> "while"
+            | `Assign -> "<-"
+            | `Sample -> "<$"
+            | `Call   -> "<@"
+          in Printf.sprintf "^%s" k in
+
+        match i with
+        | None | Some 1 -> s
+        | Some i -> Printf.sprintf "%s{%d}" s i
+  in
+
+  if off = 0 then s else
+
+  Printf.sprintf "%s%s%d" s (if off < 0 then "-" else "+") (abs off)
+
+(* -------------------------------------------------------------------- *)
 let rec pp_lvalue (ppe : PPEnv.t) fmt lv =
   match lv with
   | LvVar (p, _) ->
@@ -2258,7 +2290,7 @@ let pp_hoareF (ppe : PPEnv.t) fmt hf =
 let pp_hoareS (ppe : PPEnv.t) fmt hs =
   let ppe = PPEnv.push_mem ppe ~active:true hs.hs_m in
   let ppnode = collect2_s hs.hs_s.s_node [] in
-  let ppnode = c_ppnode ~width:80 ppe ppnode
+  let ppnode = c_ppnode ~width:ppe.PPEnv.ppe_width ppe ppnode
   in
     Format.fprintf fmt "Context : %a@\n%!" (pp_funname ppe) (EcMemory.xpath hs.hs_m);
     Format.fprintf fmt "@\n%!";
@@ -2288,7 +2320,7 @@ let pp_bdhoareF (ppe : PPEnv.t) fmt hf =
 let pp_bdhoareS (ppe : PPEnv.t) fmt hs =
   let ppe = PPEnv.push_mem ppe ~active:true hs.bhs_m in
   let ppnode = collect2_s hs.bhs_s.s_node [] in
-  let ppnode = c_ppnode ~width:80 ppe ppnode
+  let ppnode = c_ppnode ~width:ppe.PPEnv.ppe_width ppe ppnode
   in
 
   let scmp = string_of_hrcmp hs.bhs_cmp in
@@ -2328,13 +2360,15 @@ let pp_equivS (ppe : PPEnv.t) fmt es =
     if insync then begin
       let ppe    = PPEnv.push_mem ~active:true ppe es.es_ml in
       let ppnode = collect2_s es.es_sl.s_node [] in
-      let ppnode = c_ppnode ~width:80 ppe ppnode in
+      let ppnode = c_ppnode ~width:ppe.PPEnv.ppe_width ppe ppnode in
       fun fmt -> pp_node `Left fmt ppnode
     end else begin
       let ppnode = collect2_s es.es_sl.s_node es.es_sr.s_node in
       let ppnode =
-        c_ppnode ~width:40 ~mem:(fst es.es_ml, fst es.es_mr)
-                 ppe ppnode
+        c_ppnode
+          ~width:(ppe.PPEnv.ppe_width / 2)
+          ~mem:(fst es.es_ml, fst es.es_mr)
+          ppe ppnode
       in fun fmt -> pp_node `Both fmt ppnode
     end in
 
@@ -2618,21 +2652,26 @@ and pp_stmt ppe fmt s =
   pp_list "@," (pp_instr ppe) fmt s.s_node
 
 let rec pp_modexp ppe fmt (p, me) =
-  let (ppe, pp) = pp_mod_params ppe me.me_sig.mis_params in
+  let params =
+    match me.me_body with
+    | ME_Alias (i,_) -> List.take i me.me_sig.mis_params
+    | ME_Decl  _     -> []
+    | _              -> me.me_sig.mis_params in
+  let (ppe, pp) = pp_mod_params ppe params in
   Format.fprintf fmt "@[<v>module %s%t = %a@]"
     me.me_name pp (pp_modbody ppe) (p, me.me_body)
 
 and pp_modbody ppe fmt (p, body) =
   match body with
   | ME_Alias (_, mp) ->
-      Format.fprintf fmt "%a" (pp_topmod ppe) mp
+    Format.fprintf fmt "%a" (pp_topmod ppe) mp
 
   | ME_Structure ms ->
       Format.fprintf fmt "{@,  @[<v>%a@]@,}"
         (pp_list "@,@," (fun fmt i -> pp_moditem ppe fmt (p, i))) ms.ms_body
 
   | ME_Decl (mt, restr) ->
-      Format.fprintf fmt "%a" (pp_modtype ppe) (mt, restr)
+      Format.fprintf fmt "[Abstract : %a]" (pp_modtype ppe) (mt, restr)
 
 and pp_moditem ppe fmt (p, i) =
   match i with
@@ -2801,7 +2840,7 @@ let rec pp_theory ppe (fmt : Format.formatter) (path, (cth, mode)) =
 (* -------------------------------------------------------------------- *)
 let pp_stmt_with_nums (ppe : PPEnv.t) fmt stmt =
   let ppnode = collect2_s stmt.s_node [] in
-  let ppnode = c_ppnode ~width:80 ppe ppnode in
+  let ppnode = c_ppnode ~width:ppe.PPEnv.ppe_width ppe ppnode in
   Format.fprintf fmt "%a" (pp_node `Left) ppnode
 
 (* -------------------------------------------------------------------- *)

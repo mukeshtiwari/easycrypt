@@ -187,6 +187,7 @@ module Prover : sig
     po_cpufactor  : int option;
     po_nprovers   : int option;
     po_provers    : string list option * (include_exclude * string) list;
+    po_quorum     : int option;
     po_verbose    : int option;
     pl_all        : bool option;
     pl_max        : int option;
@@ -214,8 +215,8 @@ end
 
 (* -------------------------------------------------------------------- *)
 module Auto : sig
-  val addrw   : scope -> local:bool -> base:pqsymbol -> pqsymbol list -> scope
-  val addhint : scope -> phint -> scope
+  val add_rw   : scope -> local:bool -> base:pqsymbol -> pqsymbol list -> scope
+  val add_hint : scope -> phint -> scope
 end
 
 (* -------------------------------------------------------------------- *)
